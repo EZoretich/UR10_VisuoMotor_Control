@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+
+#---------------Import Libraries and messages---------------:
+
+import rospy
+import time
+import math
+import numpy as np
+from std_msgs.msg import *
+from geometry_msgs.msg import *
+import tf2_msgs.msg
+from tf.transformations import euler_from_quaternion
+from collections import Counter
+from control_lib import UR_Controller #Import UR_Controller class from control_lib.py script
+
+
+#---------------Initialise---------------:
+
+print("Please Wait While System Starts Up...")
+rospy.init_node("example_assignment", anonymous=False)
+ur_script = rospy.Publisher('/ur_hardware_interface/script_command', String, queue_size=10)
+ur_con = UR_Controller()
+time.sleep(2)
+print("System Started")
+
+# ---------------------------------------------------------- FUNCTIONS
+
+# ---------- The home_robot() function send the UR10 to its set default position
+# ---------- This position is determined by the radians values present in the
+# ---------- home_waypoint[] list. Once the the manipulator has been manually
+# ---------- positioned in the desired arrangement, the joints' angles in degrees,
+# ---------- displayed in the 'Move Joints' section of the simulator, have been 
+# ---------- converted to radians and added in the home_waypoint list.
+
+def home_robot():
+	header = "def myProg():"
+	footer = "\nend"
+	# Radians in the list below reprent:
+	# Base, Shoulder, Elbow, Wrist 1, Wrist 2, Wrist 3
+	home_waypoint = [1.5708, -1.5708, -2.61799, -0.802851, 4.71239, -0.03106686]
+	move_msg ="\nmovej({},a={},v={},t={},r={})".format(home_waypoint, max_acc ,max_vel,0,0)
+	command = header + move_msg + footer
+	return command
+
+# ---------- The move_j_pose() function is used to send Move-Joint messages to
+# ---------- the UR10. Move Joint (move_j), unlike Move-Linear (move_l), allows
+# ---------- movements in non-linear paths.
+
+def move_j_pose(pose):
+	header = "def myProg():"
+	footer = "\nend"
+	x = pose.position.x
+	y = pose.position.y
+	z = pose.position.z
+	rx, ry, rz = UR_Controller().convert_to_euler(pose.orientation)
+	pose_str = '['+str(x)+ ',' +str(y)+ ',' +str(z)+ ',' +str(rx)+ ',' +str(ry)+ ',' +str(rz) +']'
+	command = header + '\n\tmovej(p{}, a={}, v={}, t=0, r=0)'.format(pose_str, max_acc, max_vel) + footer
+	return command
+
+
+# ---------- The move_arm() function is used to move the UR10 in the direction
+# ---------- of a specified axis, by a certain, specified amount. The function
+# ---------- takes two parameters: axes (x, y, z) and dist (a specified number
+# ---------- in meters). The function also check if the desired position has been
+# ---------- reached, and returns the error given at the new position.
+
+def move_arm(axes, dist):
+	my_pose = ur_con.get_pose()
+	if axes == "x":
+		my_pose.position.x += dist
+	elif axes == "y":
+		my_pose.position.y += dist
+	else:
+		my_pose.position.z += dist
+	command = move_j_pose(my_pose)
+	ur_script.publish(command) # .publish is used to send the movements messages to the robotic arm
+	ur_con.tar_check(my_pose)
+	my_pose = ur_con.get_pose() # Re-checking the pose to get more accurate error messages
+	pos_error = ur_con.check_errors(my_pose).ee_trans_error # Check only trans_error (Distance Error)
+
+	return pos_error
+
+# ---------- The move-end_effector() fucntion is used to rotate the UR10 end
+# ----------  effector on a specified axis, by a certain, given deviation value.
+# ---------- Similarly to the previous function, two parameters are taken: rot 
+# ---------- (Roll, Pitch, Yaw) and angle (a specified number in radians)
+# ---------- Depending on the stated dimention of movement, the UR10's end 
+# ---------- effector will move accordingly. The function also re-verify the 
+# ---------- manipulator's position and returns the new given rotational error.
+
+def move_end_effector(rot, angle):
+	my_pose = ur_con.get_pose()
+	if rot == "roll":
+		command = ur_con.rotate_tool(angle, 0, 0)
+	if rot == "pitch":
+		command = ur_con.rotate_tool(0, angle, 0)
+	if rot == "yaw":
+		command = ur_con.rotate_tool(0, 0, angle)
+	ur_script.publish(command)
+	#ur_con.tar_check(my_pose)
+	time.sleep(1.5)
+	my_pose = ur_con.get_pose()
+	orient_error = ur_con.check_errors(my_pose).ee_rot_error # Check only for rotational error
+	return orient_error
+
+# ---------- The reduce_dist_error() function is used to gradually decrease the trans_error
+# ---------- through movements in the x, y and z coordinates. The function has 4 parameters:
+# ---------- axis (x, y ,z), dist_add (the distance the manipulator should move forward),
+# ---------- dist_sub (the distance the manipulator must mvoe in the backward direction), 
+# ---------- pos_error ( used to update the trans_error. It returns the new error, since
+# ---------- without it, the one in the local scope would be taken instead).
+
+def reduce_dist_error(axis, dist_add, dist_sub, pos_error):
+	new_pos_error = move_arm(axis, dist_add) # Move the end effector in ~axis~ direction, of specified value ~dist_add~, and assign the error retuned as 'new_dist_error'
+	if new_pos_error > pos_error: #if the given error is larger than the previous one
+		new_pos_error = move_arm(axis, dist_sub) # Move the end effector in same axis, but backward of specified value ~dist_sub~.
+		if new_pos_error > pos_error: # If the given error is bigger than the previous one
+			new_pos_error = move_arm(axis, dist_add) # send the UR10 forward again
+			pos_error = new_pos_error # Assign the new error as the current
+			print("MOVE:	Axis: ", axis, "	Distance:	-", dist_add) # Display axis selected and distance in which the UR10 moved
+			print("Distance Error:      ", pos_error) # And print th ecurrent trans_error
+		else:
+			pos_error = new_pos_error # If the error was instead smaller, assign the new error as current
+			print("MOVE:	Axis: ", axis, "	Distance:	", dist_sub) #Display axis selected and distance in which the UR10 moved
+			print("Distance Error:      ", pos_error) # And print the current trans_error
+	else: # Otherwise if the given error is smaller than the previous one
+		pos_error = new_pos_error #assign this new error as current
+		print("MOVE:	Axis: ", axis, "	Distance:	", dist_add) #Display axis selected and distance in which the UR10 moved
+		print("Distance Error:      ", pos_error) # And print the current trans_error
+	return pos_error
+			
+# ---------------------------------------------------------- VARIABLES
+
+max_acc = 1.0 # value for UR10 maximum accelleration
+max_vel = 1.0 # value for UR10 maximum velocity
+
+#header = "def myProg():"
+#footer = "\nend"
+# ---------- Axes List
+# Stores strings corresponding to the three axes.
+# Used later as argument to pass into reduce_dist_error() and move_arm() functions
+
+axes = ["x", "y", "z"]
+
+# ---------- Dimention of Movements List
+# Stores strings corresponsign to the three direction of movement.
+# Used later in the while loop used to reduce the rotation error of end effector
+
+rotation = ["roll", "pitch", "yaw"]
+
+# ---------------------------------------------------------- MAIN CODE
+#-------------------- Home position and Initial Error
+
+my_pos = ur_con.get_pose()
+command = home_robot() # Send the manipulator from its position, to the default home position
+ur_script.publish(command) # Send the command message to the manipulator
+#ur_con.tar_check(my_pos)
+time.sleep(5)
+my_pos = ur_con.get_pose() # re-verify the position, to get more accurate error messages
+
+# ---------- Below, instead of getting (and printing) the three error messages together,
+# ---------- they have been split. This allowed the use of error messages to firstly
+# ---------- get feedback and decrease the directional error (trans_error), then to 
+# ---------- separately focus on decreasing the rorational error for the manipulator's
+# ---------- end effector (rot_error). The third error message has been used as condition
+# ---------- for the main while loop, which terminate the program whe the ball is caught.
+
+errors = ur_con.check_errors(my_pos)
+pos_error, orient_error, ball_caught = errors.ee_trans_error, errors.ee_rot_error, errors.ball_caught
+
+print("Distance Error:      ", pos_error) # Starting with the distance error, therefore print its initial value
+
+# ---------------------------------------------------------- ALGORITHM
+# -------------------------- Decreasing Distance Error (X, Y, Z)
+
+# ---------- To optimize the process, the robot will have three movement distances
+# ---------- base on the value of the pos_error(trans_error). This will not only
+# ---------- decrease the time necessary for the program to find the location of 
+# ---------- the ball's trajectory, but it will also increase the precision
+# ---------- between the UR10 movements and the given error
+
+while ball_caught == False: # If the ball status is 'not caght'
+	while pos_error > 0.25: # while the pos_error is larger than 25cm
+		for axis in axes: # pass each item in the axes list through the reduce_dist_error() function
+			#print("------------------------- FIRST LOOP (0.60) ------------------------") # Used during troubleshooting, to check if right loop is entered
+			pos_error = reduce_dist_error(axis, 0.10, -0.20, pos_error)
+			
+		
+	while pos_error > 0.10 : # while the pos_error is larger than 10cm
+		for axis in axes:# pass each item in the axes list through the reduce_dist_error() function
+			#print("------------------------- SECOND LOOP (0.10) -------------------------") # Used during troubleshooting, to check if right loop is entered
+			pos_error = reduce_dist_error(axis, 0.05, -0.10, pos_error)
+			
+	
+	while pos_error > 0.05 : # while the pos_error is larger than 5cm
+		for axis in axes:# pass each item in the axes list through the reduce_dist_error() function
+			#print("------------------------- THIRD LOOP (0.05) -------------------------") # Used during troubleshooting, to check if right loop is entered
+			pos_error = reduce_dist_error(axis, 0.02, -0.04, pos_error)
+			
+		if pos_error < 0.05: break # If the pos_error given has reach the threshold, exit the loop
+		
+	print("##### --- Distance Threshold Reached! --- #####") # Display that the Threshold has been reached
+
+
+# -------------------------- Decreasing Distance Error (X, Y, Z)
+# ---------- Similarly to the method used above, to descrease the rotational error, each item 
+# ---------- in the rotation list (Roll, Pitch, Yaw) has been passed as argument in the 
+# ---------- move_end_effector() function. Although only one while loop condition and a 
+# ---------- singular movement for either foward (0.1) or backward  (-0.2) rotation has been
+# ---------- provided.
+
+	while orient_error > 5: # while the rotational error is bigger than 5 degrees
+		for dim in rotation: # pass each item in the rotation list through the move_end_effector() function
+			if pos_error < 0.05 and orient_error < 5: break # Break the loop if both distance and rotational error are below the thresholds
+			new_orient_error = move_end_effector(dim, 0.1) # Assign a variable for the new orient_error given by forward rotation of end effector
+			if new_orient_error > orient_error: # if the given value is larger than the initial error
+				new_orient_error = move_end_effector(dim, -0.2) # rotate backward of double the value previously forward-rotated
+				if new_orient_error > orient_error:
+					new_orient_error = move_end_effector(dim, 0.1)
+					orient_error = new_orient_error
+					print("MOVE:	Dimension: ", dim, "	Deviation:	-0.1") # Display in terminal the dimention of movement and rotation value performed
+					print("Rotational Error:      ", orient_error)
+				else:
+					orient_error = new_orient_error # assign new error as current
+					print("MOVE:	Dimension: ", dim, "	Deviation:	-0.2") # Display in terminal the dimention of movement and rotation value performed
+					print("Rotational Error:      ", orient_error) # Display the angular deviation value
+
+			else: # Otherwise, if the new, given error value is smaller than the previous error value
+				orient_error = new_orient_error # assign new error as current
+				print("MOVE:	Dimension: ", dim, "	Deviation:	0.1") # Display in terminal the dimention of movement and rotation value performed
+				print("Rotational Error:      ", orient_error) # Display the angular deviation value
+
+	if pos_error < 0.05 and orient_error < 5: break # Break the main loop if both pos_error and orient_error have reached a value below the desired Threshold.
+
+print("THE BALL HAS BEEN CAUGHT") # Display that the ball has been caught
+# (Visible also in the log available in the terminal where ball_traj was initially run)
+

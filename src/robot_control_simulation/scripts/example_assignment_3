@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+
+#---------------Import Libraries and msgs---------------:
+
+import rospy
+import time
+import math
+import numpy as np
+from std_msgs.msg import *
+from geometry_msgs.msg import *
+import tf2_msgs.msg
+from tf.transformations import euler_from_quaternion
+from collections import Counter
+from control_lib import UR_Controller
+
+
+#---------------Initialise---------------:
+
+print("Please Wait While System Starts Up...")
+rospy.init_node("example_assignment", anonymous=False)
+ur_script = rospy.Publisher('/ur_hardware_interface/script_command', String, queue_size=10)
+ur_con = UR_Controller()
+time.sleep(2)
+print("System Started")
+
+# ---------------------------------- FUNCTIONS
+# home_robot() = Send robot to default, initial position
+def home_robot():
+	header = "def myProg():"
+	footer = "\nend"
+	# Radians from Joints angles
+	# Base, Shoulder, Elbow, Wrist 1, Wrist 2, Wrist 3
+	# trying mine
+	home_waypoint = [1.5708, -1.5708, -2.61799, -0.802851, 4.71239, -0.03106686]
+	# given home waypoint
+	#home_waypoint = [-1.58825, -1.71042, -2.19911, -0.802851, 1.58825, -0.03106686]
+	move_msg ="\nmovej({},a={},v={},t={},r={})".format(home_waypoint, max_acc ,max_vel,0,0)
+	command = header + move_msg + footer
+	return command
+
+# move_j_pose() = move_j allows movements in non-linear paths
+def move_j_pose(pose):
+	header = "def myProg():"
+	footer = "\nend"
+	x = pose.position.x
+	y = pose.position.y
+	z = pose.position.z
+	rx, ry, rz = UR_Controller().convert_to_euler(pose.orientation)
+	pose_str = '['+str(x)+ ',' +str(y)+ ',' +str(z)+ ',' +str(rx)+ ',' +str(ry)+ ',' +str(rz) +']'
+	command = header + '\n\tmovej(p{}, a={}, v={}, t=0, r=0)'.format(pose_str, max_acc, max_vel) + footer
+	return command
+
+# move_arm() takes a specified axis (x,y,z) and move it from a specified distance
+# It also returns the updated error value
+def move_arm(axes, dist):
+	my_pose = ur_con.get_pose()
+	if axes == "x":
+		my_pose.position.x += dist
+	elif axes == "y":
+		my_pose.position.y += dist
+	else:
+		my_pose.position.z += dist
+	#print("ok")
+	command = move_j_pose(my_pose)
+	ur_script.publish(command)
+	#ur_script.publish(ur_con.generate_move_j(my_pose))
+	#print("ok")
+	ur_con.tar_check(my_pose)
+	#time.sleep(1)
+	#print("ok")
+	my_pose = ur_con.get_pose()
+	ball_caught = errors.ball_caught
+	pos_error = ur_con.check_errors(my_pose).ee_trans_error
+	print(axes, pos_error)
+	print("Caught? ", ball_caught)
+	return pos_error
+
+#move_end_effector() = 
+def move_end_effector(rot, angle):
+	my_pose = ur_con.get_pose()
+	if rot == "roll":
+		command = ur_con.rotate_tool(angle, 0, 0)
+	if rot == "pitch":
+		command = ur_con.rotate_tool(0, angle, 0)
+	if rot == "yaw":
+		command = ur_con.rotate_tool(0, 0, angle)
+	ur_script.publish(command)
+	#ur_con.tar_check(my_pose)
+	time.sleep(1.5)
+	my_pose = ur_con.get_pose()
+	#ball_caught = errors.ball_caught
+	orient_error = ur_con.check_errors(my_pose).ee_rot_error
+	print(rot, orient_error)
+	#print("Caught? ", ball_caught)
+	return orient_error
+	
+
+#-------------------- VARIABLES
+#Move J's are faster, since precision isn't the goal
+max_acc = 1.0 #1.0
+max_vel = 1.0
+header = "def myProg():"
+footer = "\nend"
+
+#---------------Main Code---------------:
+# Send robot to Default, starting position (home position)
+'''
+command = home_robot()
+ur_script.publish(command)
+my_pos = ur_con.get_pose()
+ur_con.tar_check(my_pos)
+'''
+
+#----------------------------------- DECREASING ERRORS
+#-------------------- Home position and Initial Error
+
+command = home_robot()
+ur_script.publish(command)
+#ur_con.tar_check(my_pose)
+time.sleep(3)
+my_pos = ur_con.get_pose()
+#print(my_pos)
+errors = ur_con.check_errors(my_pos)
+pos_error, orient_error, ball_caught = errors.ee_trans_error, errors.ee_rot_error, errors.ball_caught
+#print(errors)
+#print(pos_error)
+#print(orient_error)
+
+# --------- lists for trying to get right pose with pos_xyz and orient_xyzw
+#poses_pos = []
+#poses_orient = []
+
+#--------------------------------------------------OPTIMIZING POSITION ERROR
+# ------------------------------ GET CLOSER TO TARGET
+while ball_caught == False:
+	while pos_error > 0.60:
+		print("------------------------- FIRST LOOP (0.60)")
+		#-------------------- TRY MOVE WITH X
+		new_pos_error = move_arm("x", 0.15)
+		if new_pos_error > pos_error:
+			new_pos_error = move_arm("x", -0.30)
+			pos_error = new_pos_error
+			print("Moved back twice- X")
+			if new_pos_error < pos_error:
+				pos_error = new_pos_error
+		else:
+			pos_error = new_pos_error
+			print("Smaller straight away - X")
+		#-------------------- TRY MOVE WITH Y
+		new_pos_error = move_arm("y", 0.15)
+		if new_pos_error > pos_error:
+			new_pos_error = move_arm("y", -0.30)
+			pos_error = new_pos_error
+			print("Moved back twice- Y")
+			if new_pos_error < pos_error:
+				pos_error = new_pos_error
+		else:
+			pos_error = new_pos_error
+			print("Smaller straight away - Y")
+		#-------------------- TRY MOVE WITH Z
+		new_pos_error = move_arm("z", 0.15)
+		if new_pos_error > pos_error:
+			new_pos_error = move_arm("z", -0.30)
+			pos_error = new_pos_error
+			print("Moved back twice- Z")
+			if new_pos_error < pos_error:
+				pos_error = new_pos_error
+		else:
+			pos_error = new_pos_error
+			print("Smaller straight away - Z")
+		#if pos_error <= 0.60:
+			#break
+
+	#-----------------------------------------------------------------------
+	# ------------------------------ SMALLER OVEMENTS FOR MORE TARGET PRECISION
+
+	while pos_error > 0.10:
+		print("------------------------- SECOND LOOP (0.10)")
+		#-------------------- TRY MOVE WITH X
+		new_pos_error = move_arm("x", 0.05)
+		if new_pos_error > pos_error:
+			new_pos_error = move_arm("x", -0.10)
+			pos_error = new_pos_error
+			print("Moved back twice- X")
+			if new_pos_error < pos_error:
+				pos_error = new_pos_error
+		else:
+			pos_error = new_pos_error
+			print("Smaller straight away - X")
+		#-------------------- TRY MOVE WITH Y
+		new_pos_error = move_arm("y", 0.05)
+		if new_pos_error > pos_error:
+			new_pos_error = move_arm("y", -0.10)
+			pos_error = new_pos_error
+			print("Moved back twice- Y")
+			if new_pos_error < pos_error:
+				pos_error = new_pos_error
+		else:
+			pos_error = new_pos_error
+			print("Smaller straight away - Y")
+		#-------------------- TRY MOVE WITH Z
+		new_pos_error = move_arm("z", 0.05)
+		if new_pos_error > pos_error:
+			new_pos_error = move_arm("z", -0.10)
+			pos_error = new_pos_error
+			print("Moved back twice- Z")
+			if new_pos_error < pos_error:
+				pos_error = new_pos_error
+		else:
+			pos_error = new_pos_error
+			print("Smaller straight away - Z")
+		#if pos_error <= 0.10:
+			#break
+	#-----------------------------------------------------------------------
+	# ------------------------------ MOVEMENT TO GET INTO THRESHOLD
+
+	while pos_error > 0.04:
+		print("------------------------- THIRD LOOP (0.05)")
+		#-------------------- TRY MOVE WITH X
+		new_pos_error = move_arm("x", 0.02)
+		if new_pos_error > pos_error:
+			new_pos_error = move_arm("x", -0.04)
+			pos_error = new_pos_error
+			print("Moved back twice- X")
+			pos_error = new_pos_error
+			#if new_pos_error < pos_error or new_pos_error < 0.04:
+				#pos_error = new_pos_error
+				#print("Moved Back and Smaller. New pos_error = ", pos_error)
+		else:
+			pos_error = new_pos_error
+			print("Smaller straight away - X")
+		#-------------------- TRY MOVE WITH Y
+		new_pos_error = move_arm("y", 0.02)
+		if new_pos_error > pos_error:
+			new_pos_error = move_arm("y", -0.04)
+			pos_error = new_pos_error
+			print("Moved back twice- Y")
+			pos_error = new_pos_error
+			#if new_pos_error < pos_error or new_pos_error < 0.04:
+				#pos_error = new_pos_error
+				#print("Moved Back and Smaller. New pos_error = ", pos_error)
+		else:
+			pos_error = new_pos_error
+			print("Smaller straight away - Y")
+		#-------------------- TRY MOVE WITH Z
+		new_pos_error = move_arm("z", 0.02)
+		if new_pos_error > pos_error:
+			new_pos_error = move_arm("z", -0.04)
+			pos_error = new_pos_error
+			print("Moved back twice- Z")
+			pos_error = new_pos_error
+			#if new_pos_error < pos_error or new_pos_error < 0.04:
+				#pos_error = new_pos_error
+				#print("Moved Back and Smaller. New pos_error = ", pos_error)
+		else:
+			pos_error = new_pos_error
+			print("Smaller straight away - Z")
+	#if pos_error < 0.04:
+	print("Trans Threshold Reached!", pos_error)
+
+	#my_pos = ur_con.get_pose()
+	#print(my_pos)
+	#poses_pos.append(my_pos)
+	#--------------------------------------------------OPTIMIZING ORIENTATION ERROR
+
+	#print(my_pos)
+	#print(orient_error)
+	#print(ball_caught)
+
+	while orient_error > 5:
+	#------------------------------- ROLL
+		if pos_error < 0.05 and orient_error < 5:
+	        	break
+		new_orient_error = move_end_effector("roll", 0.1)
+		if new_orient_error > orient_error:
+			new_orient_error = move_end_effector("roll", -0.2)
+			print("Rotated back twice - Roll")
+			orient_error = new_orient_error
+			#if new_orient_error < orient_error or new_orient_error < 5:
+				#orient_error = new_orient_error
+		else:
+			orient_error = new_orient_error
+			print("Immediate Right Rotation - Roll")
+	#------------------------------------ PITCH
+		if pos_error < 0.05 and orient_error < 5:
+			break	
+		new_orient_error = move_end_effector("pitch", 0.1)
+		if new_orient_error > orient_error:
+			new_orient_error = move_end_effector("pitch", -0.2)
+			print("Rotated back twice - Pitch")
+			orient_error = new_orient_error
+			#if new_orient_error < orient_error or new_orient_error < 5:
+				#orient_error = new_orient_error
+		else:
+			orient_error = new_orient_error
+			print("Immediate Right Rotation - Pitch")
+
+	#------------------------------------ YAW
+		if pos_error < 0.05 and orient_error < 5:
+			break
+		new_orient_error = move_end_effector("yaw", 0.1)
+
+		if new_orient_error > orient_error:
+			new_orient_error = move_end_effector("yaw", -0.2)
+			print("Rotated back twice - Yaw")
+			orient_error = new_orient_error
+			#if new_orient_error < orient_error or new_orient_error < 5:
+				#orient_error = new_orient_error
+		else:
+			orient_error = new_orient_error
+			print("Immediate Right Rotation - Yaw")
+	if pos_error < 0.05 and orient_error < 5:
+		break
+print("THE BALL HAS BEEN CAUGHT")
+
+#
+'''
+#if orient_error < 5:
+print("Rotational Threshsols Reached",orient_error)
+#print("BALL CAUGHT: ",ball_caught)
+
+my_pos = ur_con.get_pose()
+#poses_orient.append(my_pos)
+#print(my_pos)
+
+errors = ur_con.check_errors(my_pos)
+pos_error, orient_error, ball_caught = errors.ee_trans_error, errors.ee_rot_error, errors.ball_caught
+print("Pos_error = ", pos_error)
+print("Orient_error = ", orient_error)
+print("Ball caught = ", ball_caught)
+'''
+####
+'''
+while pos_error > 0.04:
+	new_pos_error = move_arm("x", 0.05)
+	if new_pos_error < pos_error:
+		pos_error = new_pos_error
+	else:
+		move_arm("x", -0.05)
+		#pos_error = new_pos_error
+		break
+while pos_error > 0.04:
+	new_pos_error = move_arm("x", -0.05)
+	if new_pos_error < pos_error:
+		pos_error = new_pos_error
+	else:
+		move_arm("x", 0.05)
+		#pos_error = new_pos_error
+		break
+while pos_error > 0.04:
+	new_pos_error = move_arm("y", 0.05)
+	if new_pos_error < pos_error:
+		pos_error = new_pos_error
+	else:
+		move_arm("y", -0.05)
+		#pos_error = new_pos_error
+		break
+while pos_error > 0.04:
+	new_pos_error = move_arm("y", -0.05)
+	if new_pos_error < pos_error:
+		pos_error = new_pos_error
+	else:
+		move_arm("y", 0.05)
+		#pos_error = new_pos_error
+		break
+while pos_error > 0.04:
+	new_pos_error = move_arm("z", 0.05)
+	if new_pos_error < pos_error:
+		pos_error = new_pos_error
+	else:
+		move_arm("z", -0.05)
+		#pos_error = new_pos_error
+		break
+while pos_error > 0.04:
+	new_pos_error = move_arm("z", -0.05)
+	if new_pos_error < pos_error:
+		pos_error = new_pos_error
+	else:
+		move_arm("z", 0.05)
+		#pos_error = new_pos_error
+		break
+#print("AFTER LOOP POS ERROR? = ", pos_error)
+
+'''
+'''
+my_pos = ur_con.get_pose()
+#poses_orient.append(my_pos)
+#print(my_pos)
+
+errors = ur_con.check_errors(my_pos)
+print(errors)
+#pos_error, orient_error, ball_caught = errors.ee_trans_error, errors.ee_rot_error, errors.ball_caught
+
+####
+#print("Pos_error = ", pos_error)
+#print("Orient_error = ", orient_error)
+#print("Ball caught = ", ball_caught)
+#print(poses_pos)
+#print(poses_orient)
+'''

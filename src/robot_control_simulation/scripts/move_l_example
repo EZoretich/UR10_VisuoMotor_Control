@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+
+#---------------Import Libraries and msgs---------------:
+
+import rospy
+import time
+import math
+import numpy as np
+from std_msgs.msg import *
+from geometry_msgs.msg import *
+import tf2_msgs.msg
+from tf.transformations import euler_from_quaternion
+from collections import Counter
+from control_lib import UR_Controller
+
+
+#---------------Initialise---------------:
+
+print("Please Wait While System Starts Up...")
+rospy.init_node("move_l_example", anonymous=False)
+ur_script = rospy.Publisher('/ur_hardware_interface/script_command', String, queue_size=10)
+ur_con = UR_Controller()
+time.sleep(2)
+print("System Started")
+
+#---------------Main Code---------------:
+'''
+## Move using lib and pose
+# move forward
+target_pos = ur_con.get_pose()
+target_pos.position.x += 0.15
+command = ur_con.generate_move_l(target_pos)
+ur_script.publish(command)
+ur_con.tar_check(target_pos)
+#move up
+target_pos = ur_con.get_pose()
+target_pos.position.z += 0.15
+command = ur_con.generate_move_l(target_pos)
+ur_script.publish(command)
+ur_con.tar_check(target_pos) # useful insteead of sleep. let the robot perform both distinct pos
+'''
+#### MAKE A SQUARE WITH THE ROBOT ####
+target_pos = ur_con.get_pose()
+target_pos.position.y += 0.15
+command = ur_con.generate_move_l(target_pos)
+ur_script.publish(command)
+ur_con.tar_check(target_pos)
+
+target_pos = ur_con.get_pose()
+target_pos.position.z += 0.15
+command = ur_con.generate_move_l(target_pos)
+ur_script.publish(command)
+ur_con.tar_check(target_pos)
+
+target_pos = ur_con.get_pose()
+target_pos.position.y -= 0.15
+command = ur_con.generate_move_l(target_pos)
+ur_script.publish(command)
+ur_con.tar_check(target_pos)
+
+target_pos = ur_con.get_pose()
+target_pos.position.z -= 0.15
+command = ur_con.generate_move_l(target_pos)
+ur_script.publish(command)
+ur_con.tar_check(target_pos)
+########
+
+######### Now check if you moved to the correct position // P.S. DID NOT WORK
+#Check robot position
+#current_pos = ur_con.get_pose()
+#print("Current pos: ",current_pos)
+#print("Target pos: ", target_pos)
+
+# Block until robot position = target position
+# round() help the robot to go the specified location, and NOT retuned error
+# because of small inaccuracy in robot position. eg "go to  2 -> goes to 2.05 -> gives error"
+#while round(current_pos.position.x, 3) != round(target_pos.position.x, 3):
+	#current_pos = ur_con.get_pose()
+#print("Position Reached")
+
+## Try make your own piece of code to determine if the target position has been reached.
+# remember, all this is useful so we do not add 'sleep()' in our code, as it is unreliable. ALSO REMEMBER to make your method as a function maybe, so you can call it whenever you need instead of writing all the time.
+
+'''for i in range(0,3):
+
+	# Move L
+	my_pos = ur_con.get_pose()
+	#my_pos.position.x += 0.1
+	#my_pos.position.y += 0.1
+	my_pos.position.z += 0.1
+	command = ur_con.generate_move_l(my_pos)
+	ur_script.publish(command)
+	time.sleep(2)
+
+	# Check Error
+	my_pos = ur_con.get_pose()
+	errors = ur_con.check_errors(my_pos)
+	print("Cartesian error:", (errors.ee_trans_error),"m") #Directional error in meters
+	print("Orientational error:", errors.ee_rot_error, "degrees") #Rotational error in degrees
+	print("Ball caught:",errors.ball_caught) #Boolean tell that tells us if the ball was caught or not
+'''
+
+'''
+for i in range(0,1):
+	for ax in axes:
+		#print(ax+"here")
+		new_pos_error = move_arm(ax, 0.10)
+		if new_pos_error > pos_error:
+			new_pos_error = move_arm(ax, -0.20)
+			if new_pos_error < pos_error:
+				pos_error = new_pos_error
+		else:
+			pos_error = new_pos_error
+'''
+'''
+for i in range(0,5):
+	for n, d in enumerate(axes_mov):
+		while pos_error > 0.40:
+			for it in enumerate(axes_mov[0+i]):
+				new_pos_error = move_arm(it[0], it[1])
+				if new_pos_error > pos_error:
+					new_pos_error = move_arm(it[0], it[1]*(-2))
+					if new_pos_error < pos_error:
+						pos_error = new_pos_error
+				else:
+					pos_error = new_pos_error
+				if new_pos_error > pos_error:
+					new_pos_error = move_arm(it[0], it[1])
+					pos_error = new_pos_error
+			if pos_error < 0.05:
+				break
+'''			
+
+#print(pos_error)
+#print(orient_error)
+#print(ball_caught)
+
+'''
+# Some code that checks error and moves accordingly
+for i in range(0,3):
+
+	# Move L
+	my_pos = ur_con.get_pose()
+	my_pos.position.x += 0.1
+	#my_pos.position.y += 0.1
+	#my_pos.position.z += 0.1
+	command = ur_con.generate_move_j(my_pos)
+	ur_script.publish(command)
+	time.sleep(2)
+
+	# Check Error
+	my_pos = ur_con.get_pose()
+	errors = ur_con.check_errors(my_pos)
+	print("Cartesian error:", (errors.ee_trans_error),"m") #Directional error in meters
+	print("Orientational error:", errors.ee_rot_error, "degrees") #Rotational error in degrees
+	print("Ball caught:",errors.ball_caught) #Boolean tell that tells us if the ball was caught or not
+'''
